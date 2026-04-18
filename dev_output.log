@@ -1,0 +1,21 @@
+
+> proxy-app@0.1.0 dev
+> next dev
+
+⚠ Port 3000 is in use by an unknown process, using available port 3001 instead.
+▲ Next.js 16.2.4 (Turbopack)
+- Local:         http://localhost:3001
+- Network:       http://192.168.0.2:3001
+✓ Ready in 1074ms
+
+ GET / 200 in 646ms (next.js: 355ms, application-code: 290ms)
+ GET /api/bare/health 200 in 357ms (next.js: 333ms, application-code: 24ms)
+ GET / 200 in 103ms (next.js: 6ms, application-code: 97ms)
+ GET /api/bare/health 200 in 6ms (next.js: 2ms, application-code: 4ms)
+ GET / 200 in 66ms (next.js: 4ms, application-code: 62ms)
+ GET /api/bare/health 200 in 6ms (next.js: 3ms, application-code: 4ms)
+ GET / 200 in 80ms (next.js: 4ms, application-code: 76ms)
+ GET /api/bare/health 200 in 6ms (next.js: 1987µs, application-code: 4ms)
+ GET /uv/service/hvtrs8%2F-ezaopne%2Ccmm 404 in 139ms (next.js: 42ms, application-code: 97ms)
+ GET / 200 in 70ms (next.js: 5ms, application-code: 65ms)
+ GET /api/bare/health 200 in 5ms (next.js: 2ms, application-code: 3ms)

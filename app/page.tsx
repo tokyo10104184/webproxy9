@@ -14,58 +14,107 @@ export default function Home() {
   const [proxiedUrl, setProxiedUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [swStatus, setSwStatus] = useState<'unregistered' | 'registering' | 'ready' | 'error'>('unregistered');
-  const [statusMessage, setStatusMessage] = useState('初期化中...');
+  const [logs, setLogs] = useState<string[]>([]);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  const addLog = (msg: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setLogs(prev => [...prev, `[${timestamp}] ${msg}`]);
+  };
 
   // Check server health and register SW on mount
   useEffect(() => {
     async function initSystem() {
+      addLog('システム初期化を開始します...');
+
       // 1. Check server health
       try {
-        setStatusMessage('サーバーの状態を確認中...');
+        addLog('サーバーの状態を確認中 (/api/bare/health)...');
         const res = await fetch('/api/bare/health');
-        if (!res.ok) throw new Error('サーバーが応答しません');
-      } catch (err) {
-        console.error('Server health check failed:', err);
-        // We continue anyway as it might be a transient issue or the health endpoint might be missing
+        if (res.ok) {
+          addLog('サーバー接続完了');
+        } else {
+          addLog(`サーバー警告: ステータス ${res.status}`);
+        }
+      } catch (err: any) {
+        addLog(`サーバー接続失敗: ${err.message}`);
       }
 
       // 2. Register SW
       if ('serviceWorker' in navigator) {
         setSwStatus('registering');
-        setStatusMessage('システム（Service Worker）を登録中...');
+        addLog('Service Workerの登録を開始します...');
         try {
+          addLog('Service Workerを登録中...');
           const registration = await navigator.serviceWorker.register('/uv/sw.js', {
             scope: '/uv/service/',
           });
 
-          // Force update if needed
-          registration.update();
+          addLog(`Service Worker登録完了 (Scope: ${registration.scope})`);
 
-          setStatusMessage('準備完了を待機中...');
-          await navigator.serviceWorker.ready;
+          const checkState = () => {
+            if (registration.active) {
+              addLog('Service Workerがアクティブになりました。');
+              setSwStatus('ready');
+              return true;
+            }
+            return false;
+          };
 
-          setSwStatus('ready');
-          setStatusMessage('システム準備完了');
-        } catch (err) {
-          console.error('Service worker registration failed:', err);
+          if (!checkState()) {
+            addLog('Service Workerのアクティベートを待機中...');
+            // Wait for the state to change to active
+            const sw = registration.installing || registration.waiting;
+            if (sw) {
+              sw.addEventListener('statechange', (e: any) => {
+                addLog(`Service Worker 状態変更: ${e.target.state}`);
+                if (e.target.state === 'activated') {
+                  setSwStatus('ready');
+                  addLog('システム準備完了。プロキシを利用可能です。');
+                }
+              });
+            }
+
+            // Fallback timeout or interval check
+            let attempts = 0;
+            const interval = setInterval(() => {
+              attempts++;
+              if (checkState() || attempts > 20) {
+                clearInterval(interval);
+                if (attempts > 20) {
+                  setSwStatus(current => {
+                    if (current !== 'ready') {
+                      addLog('待機タイムアウト。続行を試みます...');
+                      return 'ready';
+                    }
+                    return current;
+                  });
+                }
+              }
+            }, 500);
+          } else {
+            addLog('システム準備完了。プロキシを利用可能です。');
+          }
+        } catch (err: any) {
+          addLog(`Service Workerエラー: ${err.message}`);
           setSwStatus('error');
-          setStatusMessage('登録エラーが発生しました');
         }
       } else {
+        addLog('エラー: お使いのブラウザはService Workerをサポートしていません。');
         setSwStatus('error');
-        setStatusMessage('お使いのブラウザはプロキシをサポートしていません');
       }
     }
     initSystem();
   }, []);
 
   const resetSystem = async () => {
+    addLog('システムをリセット中...');
     if ('serviceWorker' in navigator) {
       const regs = await navigator.serviceWorker.getRegistrations();
       for (let reg of regs) {
         await reg.unregister();
       }
+      addLog('Service Workerを解除しました。ページを再読み込みします。');
       window.location.reload();
     }
   };
@@ -79,32 +128,36 @@ export default function Home() {
     if (!inputUrl || inputUrl === 'https://') return;
 
     setIsLoading(true);
+    addLog(`${inputUrl} への接続を準備中...`);
 
     try {
       // Wait for scripts
       let waitCount = 0;
+      addLog('プロキシ設定をチェック中...');
       while (!window.__uv$config && waitCount < 50) {
         await new Promise(r => setTimeout(r, 100));
         waitCount++;
       }
 
       if (!window.__uv$config) {
-        throw new Error('プロキシ設定の読み込みに失敗しました。ページを再読み込みしてください。');
+        throw new Error('プロキシ設定が読み込まれていません。');
       }
 
       if (swStatus !== 'ready') {
-        throw new Error('システムの準備が整っていません。数秒待ってからやり直してください。');
+        throw new Error('システムが準備完了状態ではありません。');
       }
 
+      addLog('URLを変換中...');
       let formattedUrl = inputUrl.trim();
       if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
         formattedUrl = 'https://' + formattedUrl;
       }
 
       const encodedUrl = window.__uv$config.prefix + window.__uv$config.encodeUrl(formattedUrl);
+      addLog('プロキシを起動します。');
       setProxiedUrl(encodedUrl);
     } catch (err: any) {
-      console.error('Proxy launch failed:', err);
+      addLog(`起動エラー: ${err.message}`);
       alert(err.message || 'エラーが発生しました');
     } finally {
       setIsLoading(false);
@@ -178,19 +231,32 @@ export default function Home() {
               </button>
             </form>
 
-            <div className="flex flex-col items-center gap-2">
+            <div className="flex flex-col items-center gap-4">
               <div className="flex items-center gap-2 text-xs text-gray-500">
                 <div className={`w-2 h-2 rounded-full ${swStatus === 'ready' ? 'bg-green-500' : swStatus === 'error' ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`}></div>
-                {statusMessage}
+                {swStatus === 'ready' ? '準備完了' : '初期化プロセス進行中'}
               </div>
+
+              {/* Log Window */}
+              <div className="w-full max-w-lg bg-black/50 border border-gray-700 rounded-lg p-3 text-left font-mono text-[10px] h-32 overflow-y-auto space-y-1">
+                {logs.map((log, i) => (
+                  <div key={i} className={log.includes('エラー') || log.includes('失敗') ? 'text-red-400' : log.includes('完了') ? 'text-green-400' : 'text-gray-400'}>
+                    {log}
+                  </div>
+                ))}
+                {swStatus !== 'ready' && swStatus !== 'error' && (
+                  <div className="text-blue-400 animate-pulse">_</div>
+                )}
+              </div>
+
               {swStatus === 'error' && (
                 <button onClick={resetSystem} className="text-xs text-blue-400 hover:underline">
-                  システムをリセットして再試行
+                  システムをリセットして再起動
                 </button>
               )}
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-12">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8">
               {['google.com', 'youtube.com', 'discord.com', 'reddit.com'].map((site) => (
                 <button
                   key={site}
