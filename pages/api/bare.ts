@@ -4,7 +4,7 @@ const bare = createBareServer('/api/bare/');
 
 export default async function handler(req: any, res: any) {
   // Simple health check
-  if (req.url === '/api/bare/health') {
+  if (req.url === '/api/bare/health' || req.url === '/api/bare/health/') {
     return res.status(200).json({ status: 'ok', time: new Date().toISOString() });
   }
 

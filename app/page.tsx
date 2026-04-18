@@ -14,29 +14,61 @@ export default function Home() {
   const [proxiedUrl, setProxiedUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [swStatus, setSwStatus] = useState<'unregistered' | 'registering' | 'ready' | 'error'>('unregistered');
+  const [statusMessage, setStatusMessage] = useState('初期化中...');
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // Attempt to register service worker on mount
+  // Check server health and register SW on mount
   useEffect(() => {
-    async function registerSW() {
+    async function initSystem() {
+      // 1. Check server health
+      try {
+        setStatusMessage('サーバーの状態を確認中...');
+        const res = await fetch('/api/bare/health');
+        if (!res.ok) throw new Error('サーバーが応答しません');
+      } catch (err) {
+        console.error('Server health check failed:', err);
+        // We continue anyway as it might be a transient issue or the health endpoint might be missing
+      }
+
+      // 2. Register SW
       if ('serviceWorker' in navigator) {
         setSwStatus('registering');
+        setStatusMessage('システム（Service Worker）を登録中...');
         try {
-          await navigator.serviceWorker.register('/uv/sw.js', {
+          const registration = await navigator.serviceWorker.register('/uv/sw.js', {
             scope: '/uv/service/',
           });
 
-          // Wait for ready
+          // Force update if needed
+          registration.update();
+
+          setStatusMessage('準備完了を待機中...');
           await navigator.serviceWorker.ready;
+
           setSwStatus('ready');
+          setStatusMessage('システム準備完了');
         } catch (err) {
-          console.error('Service worker registration failed on mount:', err);
+          console.error('Service worker registration failed:', err);
           setSwStatus('error');
+          setStatusMessage('登録エラーが発生しました');
         }
+      } else {
+        setSwStatus('error');
+        setStatusMessage('お使いのブラウザはプロキシをサポートしていません');
       }
     }
-    registerSW();
+    initSystem();
   }, []);
+
+  const resetSystem = async () => {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (let reg of regs) {
+        await reg.unregister();
+      }
+      window.location.reload();
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,48 +81,31 @@ export default function Home() {
     setIsLoading(true);
 
     try {
-      // 1. Check if Ultraviolet is loaded (it should be in layout.tsx)
+      // Wait for scripts
       let waitCount = 0;
       while (!window.__uv$config && waitCount < 50) {
-        await new Promise(r => setTimeout(r, 100)); // wait up to 5s for scripts
+        await new Promise(r => setTimeout(r, 100));
         waitCount++;
       }
 
       if (!window.__uv$config) {
-        throw new Error('Ultraviolet configuration not found. Please refresh the page.');
+        throw new Error('プロキシ設定の読み込みに失敗しました。ページを再読み込みしてください。');
       }
 
-      // 2. Register/Check service worker
-      if ('serviceWorker' in navigator) {
-        if (swStatus !== 'ready') {
-          setSwStatus('registering');
-          await navigator.serviceWorker.register('/uv/sw.js', {
-            scope: '/uv/service/',
-          });
-
-          const swReady = Promise.race([
-            navigator.serviceWorker.ready,
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Service Worker activation timeout')), 10000))
-          ]);
-
-          await swReady;
-          setSwStatus('ready');
-        }
-
-        let formattedUrl = inputUrl.trim();
-        if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
-          formattedUrl = 'https://' + formattedUrl;
-        }
-
-        const encodedUrl = window.__uv$config.prefix + window.__uv$config.encodeUrl(formattedUrl);
-        setProxiedUrl(encodedUrl);
-      } else {
-        throw new Error('Your browser does not support service workers.');
+      if (swStatus !== 'ready') {
+        throw new Error('システムの準備が整っていません。数秒待ってからやり直してください。');
       }
+
+      let formattedUrl = inputUrl.trim();
+      if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
+        formattedUrl = 'https://' + formattedUrl;
+      }
+
+      const encodedUrl = window.__uv$config.prefix + window.__uv$config.encodeUrl(formattedUrl);
+      setProxiedUrl(encodedUrl);
     } catch (err: any) {
       console.error('Proxy launch failed:', err);
-      alert(err.message || 'An error occurred while launching the proxy.');
-      setSwStatus('error');
+      alert(err.message || 'エラーが発生しました');
     } finally {
       setIsLoading(false);
     }
@@ -128,7 +143,6 @@ export default function Home() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-white font-sans overflow-hidden">
-      {/* Header / Navigation Bar */}
       {!proxiedUrl ? (
         <div className="flex flex-col items-center justify-center flex-grow p-4">
           <div className="w-full max-w-2xl text-center space-y-8">
@@ -149,7 +163,7 @@ export default function Home() {
               />
               <button
                 type="submit"
-                disabled={isLoading}
+                disabled={isLoading || swStatus !== 'ready'}
                 className="absolute right-2 top-2 bottom-2 px-8 bg-blue-600 hover:bg-blue-500 rounded-full font-bold transition-colors disabled:opacity-50 min-w-[100px]"
               >
                 {isLoading ? (
@@ -164,9 +178,16 @@ export default function Home() {
               </button>
             </form>
 
-            <div className="flex items-center justify-center gap-2 text-xs text-gray-500">
-              <div className={`w-2 h-2 rounded-full ${swStatus === 'ready' ? 'bg-green-500' : swStatus === 'error' ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`}></div>
-              {swStatus === 'ready' ? 'システム準備完了' : swStatus === 'registering' ? 'システム起動中...' : swStatus === 'error' ? 'システムエラー' : 'システム待機中'}
+            <div className="flex flex-col items-center gap-2">
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                <div className={`w-2 h-2 rounded-full ${swStatus === 'ready' ? 'bg-green-500' : swStatus === 'error' ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`}></div>
+                {statusMessage}
+              </div>
+              {swStatus === 'error' && (
+                <button onClick={resetSystem} className="text-xs text-blue-400 hover:underline">
+                  システムをリセットして再試行
+                </button>
+              )}
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-12">
@@ -178,7 +199,8 @@ export default function Home() {
                     setUrl(fullUrl);
                     launchProxy(fullUrl);
                   }}
-                  className="p-3 bg-gray-800 hover:bg-gray-700 rounded-lg border border-gray-700 transition-colors text-sm"
+                  className="p-3 bg-gray-800 hover:bg-gray-700 rounded-lg border border-gray-700 transition-colors text-sm disabled:opacity-50"
+                  disabled={swStatus !== 'ready'}
                 >
                   {site}
                 </button>
