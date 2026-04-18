@@ -1,7 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
-import Script from 'next/script';
+import { useState, useRef, useEffect } from 'react';
 
 declare global {
   interface Window {
@@ -26,15 +25,25 @@ export default function Home() {
 
     setIsLoading(true);
 
-    // Register service worker if not already registered
-    if ('serviceWorker' in navigator) {
-      try {
+    try {
+      // 1. Check if Ultraviolet is loaded
+      if (!window.__uv$config) {
+        throw new Error('Ultraviolet configuration not found. Please refresh the page.');
+      }
+
+      // 2. Register service worker
+      if ('serviceWorker' in navigator) {
         const registration = await navigator.serviceWorker.register('/uv/sw.js', {
           scope: '/uv/service/',
         });
 
-        // Wait for the service worker to be ready
-        await navigator.serviceWorker.ready;
+        // Wait for it to be ready with a timeout
+        const swReady = Promise.race([
+          navigator.serviceWorker.ready,
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Service Worker activation timeout')), 10000))
+        ]);
+
+        await swReady;
 
         let formattedUrl = inputUrl.trim();
         if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
@@ -43,15 +52,15 @@ export default function Home() {
 
         const encodedUrl = window.__uv$config.prefix + window.__uv$config.encodeUrl(formattedUrl);
         setProxiedUrl(encodedUrl);
-      } catch (err) {
-        console.error('Service worker registration failed:', err);
-        alert('Service worker registration failed. Make sure you are using HTTPS or localhost.');
+      } else {
+        throw new Error('Your browser does not support service workers.');
       }
-    } else {
-      alert('Your browser does not support service workers.');
+    } catch (err: any) {
+      console.error('Proxy launch failed:', err);
+      alert(err.message || 'An error occurred while launching the proxy.');
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
   };
 
   const handleBack = () => {
@@ -86,9 +95,6 @@ export default function Home() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-white font-sans overflow-hidden">
-      <Script src="/uv/uv.bundle.js" strategy="afterInteractive" />
-      <Script src="/uv/uv.config.js" strategy="afterInteractive" />
-
       {/* Header / Navigation Bar */}
       {!proxiedUrl ? (
         <div className="flex flex-col items-center justify-center flex-grow p-4">
