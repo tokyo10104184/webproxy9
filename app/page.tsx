@@ -13,7 +13,30 @@ export default function Home() {
   const [url, setUrl] = useState('https://');
   const [proxiedUrl, setProxiedUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [swStatus, setSwStatus] = useState<'unregistered' | 'registering' | 'ready' | 'error'>('unregistered');
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // Attempt to register service worker on mount
+  useEffect(() => {
+    async function registerSW() {
+      if ('serviceWorker' in navigator) {
+        setSwStatus('registering');
+        try {
+          await navigator.serviceWorker.register('/uv/sw.js', {
+            scope: '/uv/service/',
+          });
+
+          // Wait for ready
+          await navigator.serviceWorker.ready;
+          setSwStatus('ready');
+        } catch (err) {
+          console.error('Service worker registration failed on mount:', err);
+          setSwStatus('error');
+        }
+      }
+    }
+    registerSW();
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,24 +49,33 @@ export default function Home() {
     setIsLoading(true);
 
     try {
-      // 1. Check if Ultraviolet is loaded
+      // 1. Check if Ultraviolet is loaded (it should be in layout.tsx)
+      let waitCount = 0;
+      while (!window.__uv$config && waitCount < 50) {
+        await new Promise(r => setTimeout(r, 100)); // wait up to 5s for scripts
+        waitCount++;
+      }
+
       if (!window.__uv$config) {
         throw new Error('Ultraviolet configuration not found. Please refresh the page.');
       }
 
-      // 2. Register service worker
+      // 2. Register/Check service worker
       if ('serviceWorker' in navigator) {
-        const registration = await navigator.serviceWorker.register('/uv/sw.js', {
-          scope: '/uv/service/',
-        });
+        if (swStatus !== 'ready') {
+          setSwStatus('registering');
+          await navigator.serviceWorker.register('/uv/sw.js', {
+            scope: '/uv/service/',
+          });
 
-        // Wait for it to be ready with a timeout
-        const swReady = Promise.race([
-          navigator.serviceWorker.ready,
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Service Worker activation timeout')), 10000))
-        ]);
+          const swReady = Promise.race([
+            navigator.serviceWorker.ready,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Service Worker activation timeout')), 10000))
+          ]);
 
-        await swReady;
+          await swReady;
+          setSwStatus('ready');
+        }
 
         let formattedUrl = inputUrl.trim();
         if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
@@ -58,6 +90,7 @@ export default function Home() {
     } catch (err: any) {
       console.error('Proxy launch failed:', err);
       alert(err.message || 'An error occurred while launching the proxy.');
+      setSwStatus('error');
     } finally {
       setIsLoading(false);
     }
@@ -117,11 +150,24 @@ export default function Home() {
               <button
                 type="submit"
                 disabled={isLoading}
-                className="absolute right-2 top-2 bottom-2 px-8 bg-blue-600 hover:bg-blue-500 rounded-full font-bold transition-colors disabled:opacity-50"
+                className="absolute right-2 top-2 bottom-2 px-8 bg-blue-600 hover:bg-blue-500 rounded-full font-bold transition-colors disabled:opacity-50 min-w-[100px]"
               >
-                {isLoading ? '起動中...' : 'Go'}
+                {isLoading ? (
+                  <span className="flex items-center gap-2">
+                    <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    起動中
+                  </span>
+                ) : 'Go'}
               </button>
             </form>
+
+            <div className="flex items-center justify-center gap-2 text-xs text-gray-500">
+              <div className={`w-2 h-2 rounded-full ${swStatus === 'ready' ? 'bg-green-500' : swStatus === 'error' ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`}></div>
+              {swStatus === 'ready' ? 'システム準備完了' : swStatus === 'registering' ? 'システム起動中...' : swStatus === 'error' ? 'システムエラー' : 'システム待機中'}
+            </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-12">
               {['google.com', 'youtube.com', 'discord.com', 'reddit.com'].map((site) => (
